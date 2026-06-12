@@ -64,11 +64,6 @@ defaults.Hotbar.Theme.Frame                  = 'ffxiv'
 defaults.Hotbar.Theme.BarBackground          = 'none'   -- key from HOTBAR_THEMES
 defaults.Hotbar.ShowCooldownSweep            = true    -- radial arc over cooling-down slots
 
-defaults.Utility                             = {}
-defaults.Utility.LockButton                  = {}
-defaults.Utility.LockButton.OffsetX          = 0   -- 0 = auto-position near bar 1 on first run
-defaults.Utility.LockButton.OffsetY          = 0
-
 defaults.ActionPicker                        = {}
 defaults.ActionPicker.PanelTheme             = 'dark'   -- key from PANEL_THEMES
 defaults.ActionPicker.Font                   = 'Calibri'

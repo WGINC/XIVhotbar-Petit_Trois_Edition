@@ -1,44 +1,17 @@
 --[[
-        Copyright © 2026, Dellingr
-        All rights reserved.
-
-        Redistribution and use in source and binary forms, with or without
-        modification, are permitted provided that the following conditions are met:
-
-            * Redistributions of source code must retain the above copyright
-              notice, this list of conditions and the following disclaimer.
-            * Redistributions in binary form must reproduce the above copyright
-              notice, this list of conditions and the following disclaimer in the
-              documentation and/or other materials provided with the distribution.
-            * Neither the name of xivhotbar nor the
-              names of its contributors may be used to endorse or promote products
-              derived from this software without specific prior written permission.
-
-        THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-        ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-        WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-        DISCLAIMED. IN NO EVENT SHALL Dellingr BE LIABLE FOR ANY
-        DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-        (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-        LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-        ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-        (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-        SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-]]
---[[
-  lib/action_picker.lua  (v5 - refactored generic filter strips + AoE scope filter)
+  lib/action_picker.lua  (v5 — refactored generic filter strips + AoE scope filter)
 
   Five-tab panel:
-    Magic   -> Type -> School -> Scope (AoE/Single/Self)
-    Trusts  -> Role
-    Ability -> Scope
-    WSkills -> Physical/Magical -> Scope
-    Cfg     -> Settings editor
+    Magic   → Type → School → Scope (AoE/Single/Self)
+    Trusts  → Role
+    Ability → Scope
+    WSkills → Physical/Magical → Scope
+    Cfg     → Settings editor
 
   Filter strips are fully generic: TAB_FILTER_CHAIN drives which dimensions
   appear per tab. Each strip only renders if ≥2 distinct values are present.
 
-  on_mouse() -> 'consumed' | 'dragging' | action_table | nil
+  on_mouse() → 'consumed' | 'dragging' | action_table | nil
 ]]
 
 local action_picker = {}
@@ -64,6 +37,96 @@ local ST_BOOL_C     = -48
 local ST_NUM_A      = -72
 local ST_NUM_B      = -48
 local ST_NUM_C      = -18
+local ST_CYC_PREV   = -100  -- [<] for cycle rows
+local ST_CYC_MID    =  -86  -- value label for cycle rows (68 px before [>])
+local ST_CYC_NEXT   =  -18  -- [>] for cycle rows
+
+-- ── Appearance themes ──────────────────────────────────────────────────────
+-- All solid-colour themes use white-square.png as base and :color(r,g,b) tint.
+-- Wallpaper themes load a user-supplied PNG from images/backgrounds/.
+-- fr/fg/fb are the foreground (text) colour that reads best against that bg.
+local PANEL_THEMES = {
+  {key='dark',      label='Dark',       path=nil,                    r=15,  g=18,  b=25,  a=230, fr=255, fg=255, fb=255},
+  {key='blue',      label='Blue',       path=nil,                    r=18,  g=40,  b=98,  a=215, fr=210, fg=230, fb=255},
+  {key='skyblue',   label='Sky Blue',   path=nil,                    r=55,  g=100, b=180, a=205, fr=255, fg=255, fb=255},
+  {key='purple',    label='Purple',     path=nil,                    r=68,  g=15,  b=98,  a=215, fr=230, fg=210, fb=255},
+  {key='yellow',    label='Yellow',     path=nil,                    r=195, g=165, b=12,  a=210, fr=22,  fg=18,  fb=5 },
+  {key='pine',      label='Pine',       path=nil,                    r=12,  g=68,  b=28,  a=215, fr=210, fg=255, fb=220},
+  {key='red',       label='Red',        path=nil,                    r=118, g=12,  b=12,  a=215, fr=255, fg=215, fb=210},
+  {key='orange',    label='Orange',     path=nil,                    r=158, g=65,  b=8,   a=215, fr=255, fg=238, fb=210},
+  -- PlayOnline wallpapers — place CONVERTED standard PNGs in images/backgrounds/.
+  -- The POL container is a proprietary SE format; see WALLPAPERS.txt for instructions.
+  -- FFXI wallpapers
+  {key='xi_box_art',    label='XI: Box',      path='backgrounds/xi_box_art',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_cg_art',     label='XI: CG Art',   path='backgrounds/xi_cg_art',     r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_logo',       label='XI: Logo',     path='backgrounds/xi_logo',       r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_roz',        label='XI: RoZ',      path='backgrounds/xi_roz',        r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_elvaan_1',   label='XI: Elvaan1',  path='backgrounds/xi_elvaan_1',   r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_elvaan_2',   label='XI: Elvaan2',  path='backgrounds/xi_elvaan_2',   r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_galka',      label='XI: Galka',    path='backgrounds/xi_galka',      r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_hume_1',     label='XI: Hume 1',   path='backgrounds/xi_hume_1',     r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_hume_2',     label='XI: Hume 2',   path='backgrounds/xi_hume_2',     r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_mithra',     label='XI: Mithra',   path='backgrounds/xi_mithra',     r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_tarutaru_1', label='XI: Taru 1',   path='backgrounds/xi_tarutaru_1', r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_tarutaru_2', label='XI: Taru 2',   path='backgrounds/xi_tarutaru_2', r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_image_1',    label='XI: Image 1',  path='backgrounds/xi_image_1',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_image_2',    label='XI: Image 2',  path='backgrounds/xi_image_2',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_image_3',    label='XI: Image 3',  path='backgrounds/xi_image_3',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_image_4',    label='XI: Image 4',  path='backgrounds/xi_image_4',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_image_5',    label='XI: Image 5',  path='backgrounds/xi_image_5',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_1',       label='XI: Open. 1',  path='backgrounds/xi_opening_1',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_2',       label='XI: Open. 2',  path='backgrounds/xi_opening_2',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_3',       label='XI: Open. 3',  path='backgrounds/xi_opening_3',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_4',       label='XI: Open. 4',  path='backgrounds/xi_opening_4',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_5',       label='XI: Open. 5',  path='backgrounds/xi_opening_5',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_6',       label='XI: Open. 6',  path='backgrounds/xi_opening_6',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_7',       label='XI: Open. 7',  path='backgrounds/xi_opening_7',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_8',       label='XI: Open. 8',  path='backgrounds/xi_opening_8',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_9',       label='XI: Open. 9',  path='backgrounds/xi_opening_9',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='xi_op_10',      label='XI: Open.10',  path='backgrounds/xi_opening_10', r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  -- Other Square Enix wallpapers
+  {key='chocobo_1',     label='Chocobo 1',    path='backgrounds/chocobo_1',     r=255,g=255,b=255,a=180,fr=22, fg=14, fb=5 },
+  {key='chocobo_2',     label='Chocobo 2',    path='backgrounds/chocobo_2',     r=255,g=255,b=255,a=180,fr=22, fg=14, fb=5 },
+  {key='chocobo_3',     label='Chocobo 3',    path='backgrounds/chocobo_3',     r=255,g=255,b=255,a=180,fr=22, fg=14, fb=5 },
+  {key='ffvii_ac_1',    label='AC: 1',        path='backgrounds/ffvii_ac_1',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffvii_ac_2',    label='AC: 2',        path='backgrounds/ffvii_ac_2',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffvii_ac_3',    label='AC: 3',        path='backgrounds/ffvii_ac_3',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffvii_ac_4',    label='AC: 4',        path='backgrounds/ffvii_ac_4',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffvii_ac_5',    label='AC: 5',        path='backgrounds/ffvii_ac_5',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffvii_ac_6',    label='AC: 6',        path='backgrounds/ffvii_ac_6',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffxii_ashe',    label='XII: Ashe',    path='backgrounds/ffxii_ashe',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffxii_balflear',label='XII: Balfl.',  path='backgrounds/ffxii_balflear',r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffxii_basch',   label='XII: Basch',   path='backgrounds/ffxii_basch',   r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffxii_fran',    label='XII: Fran',    path='backgrounds/ffxii_fran',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffxii_penelo',  label='XII: Penelo',  path='backgrounds/ffxii_penelo',  r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffxii_vaan',    label='XII: Vaan',    path='backgrounds/ffxii_vaan',    r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffxc_1',        label='CrysChron 1',  path='backgrounds/ffxc_1',        r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+  {key='ffxc_2',        label='CrysChron 2',  path='backgrounds/ffxc_2',        r=255,g=255,b=255,a=180,fr=255,fg=255,fb=255},
+}
+
+-- Hotbar backdrops: simpler list (no text colour, wallpapers intentionally omitted
+-- since per-bar wallpaper stretching looks inconsistent).
+local HOTBAR_THEMES = {
+  {key='none',    label='None',     r=0,   g=0,   b=0,   a=0  },
+  {key='dark',    label='Dark',     r=15,  g=18,  b=25,  a=165},
+  {key='blue',    label='Blue',     r=18,  g=40,  b=98,  a=145},
+  {key='skyblue', label='Sky Blue', r=55,  g=100, b=180, a=135},
+  {key='purple',  label='Purple',   r=68,  g=15,  b=98,  a=145},
+  {key='yellow',  label='Yellow',   r=195, g=165, b=12,  a=135},
+  {key='pine',    label='Pine',     r=12,  g=68,  b=28,  a=145},
+  {key='red',     label='Red',      r=118, g=12,  b=12,  a=145},
+  {key='orange',  label='Orange',   r=158, g=65,  b=8,   a=145},
+}
+
+local PANEL_FONTS = {
+  {key='Calibri',         label='Calibri'  },
+  {key='Segoe UI',        label='Segoe UI' },
+  {key='Trebuchet MS',    label='Trebuchet'},
+  {key='Arial',           label='Arial'    },
+  {key='Verdana',         label='Verdana'  },
+  {key='Tahoma',          label='Tahoma'   },
+  {key='Times New Roman', label='Times NR' },
+}
 
 -- ── Data tables ───────────────────────────────────────────────────────────
 local SKILL_NAMES = {
@@ -296,10 +359,13 @@ local function get_ws_type(res)
   return 'Physical'
 end
 
--- Enemy-AoE spells whose targets field lists only Enemy (so the Party/Ally check above won't catch them). Identified by naming convention (-ga/-ja)
+-- Enemy-AoE spells whose targets field lists only Enemy (so the Party/Ally
+-- check above won't catch them). Identified by naming convention (-ga/-ja)
 -- or explicit lookup for ancient magic and Blue Magic AoE spells.
 -- Note: -ra spells that target Enemy DON'T exist for standard player jobs;
--- all player-castable -ra spells (Protectra, Shellra, Barfira…) target Party/Ally and are already handled above. Libra ends in 'ra' but is single-target, which is why -ra is intentionally absent from the suffix check.
+-- all player-castable -ra spells (Protectra, Shellra, Barfira…) target
+-- Party/Ally and are already handled above. Libra ends in 'ra' but is
+-- single-target, which is why -ra is intentionally absent from the suffix check.
 local AOE_ENEMY_NAMES = {
   -- Ancient magic tier I (BLM Lv61+)
   quake=true,   tornado=true, flood=true,  freeze=true, burst=true,
@@ -377,7 +443,7 @@ end
 local database_ref    = nil
 local panel_bg        = nil
 local title_label     = nil   -- "Action Picker" (larger, prominent)
-local hint_label      = nil   -- "drag to reposition" (smaller, italic, grey (until I find a more suitable color, because screw gray))
+local hint_label      = nil   -- "drag to reposition" (smaller, italic, grey)
 local tab_texts       = {}
 local strip_texts     = {}   -- [strip_idx][opt_idx]
 local grid_icons      = {}
@@ -487,7 +553,7 @@ function action_picker:init(theme_options, db)
   local blank = windower.addon_path .. '/images/other/blank.png'
   local bsq   = windower.addon_path .. '/images/other/black-square.png'
 
-  -- Panel background: slightly transparent dark grey (black XP)
+  -- Panel background: slightly transparent dark grey
   panel_bg = make_image(bsq, self.panel_w, self.panel_h, 230)
   panel_bg:fit(false)
 
@@ -826,6 +892,52 @@ function action_picker:refresh_grid()
 end
 
 -- ── Settings tab ─────────────────────────────────────────────────────────
+-- ── Appearance application helpers ───────────────────────────────────────
+function action_picker:apply_panel_theme(key)
+  local theme = nil
+  for _, t in ipairs(PANEL_THEMES) do
+    if t.key == key then theme = t; break end
+  end
+  if not theme then return end
+
+  local wsq  = windower.addon_path .. '/images/other/white-square.png'
+  local path = wsq
+  if theme.path then
+    local wp = windower.addon_path .. '/images/' .. theme.path .. '.png'
+    local f  = io.open(wp, 'r')
+    if f then f:close(); path = wp end
+  end
+
+  panel_bg:path(path)
+  panel_bg:fit(theme.path ~= nil)   -- stretch wallpapers, keep solid colour crisp
+  panel_bg:size(self.panel_w, self.panel_h)
+  panel_bg:color(theme.r, theme.g, theme.b)
+  panel_bg:alpha(theme.a)
+
+  -- Recolour foreground text elements for legibility against this background
+  if title_label then title_label:color(theme.fr, theme.fg, theme.fb) end
+  if hint_label  then
+    hint_label:color(
+      math.floor(theme.fr * 0.6),
+      math.floor(theme.fg * 0.6),
+      math.floor(theme.fb * 0.6))
+  end
+  if name_label then name_label:color(theme.fr, theme.fg, math.floor(theme.fb * 0.55)) end
+end
+
+function action_picker:apply_font(font_key)
+  local function rf(t) if t then t:font(font_key) end end
+  rf(title_label); rf(hint_label); rf(name_label)
+  rf(scroll_up_btn); rf(scroll_down_btn); rf(st_apply)
+  for _, t in ipairs(tab_texts) do rf(t) end
+  for si = 1, MAX_STRIPS do
+    for oi = 1, MAX_STRIP_OPT do rf(strip_texts[si][oi]) end
+  end
+  for i = 1, MAX_ST_ROWS do
+    rf(st_labels[i]); rf(st_btn_a[i]); rf(st_btn_b[i]); rf(st_btn_c[i])
+  end
+end
+
 function action_picker:build_settings_defs()
   if not self.settings_ref then self.st_defs = {}; return end
   local s    = self.settings_ref
@@ -898,6 +1010,9 @@ function action_picker:build_settings_defs()
   bool_row('Anim. Lights',
     function()  return s.Hotbar.UseAnimatedHighlights end,
     function(v) s.Hotbar.UseAnimatedHighlights = v end, 'On', 'Off')
+  bool_row('CD Sweep',
+    function()  return s.Hotbar.ShowCooldownSweep end,
+    function(v) s.Hotbar.ShowCooldownSweep = v end, 'On', 'Off')
 
   sect('── Opacity ──')
   int_row('Slot Alpha',
@@ -920,6 +1035,46 @@ function action_picker:build_settings_defs()
   int_row('Hotbar Spacing',
     function()  return s.Hotbar.Style.HotbarSpacing end,
     function(v) s.Hotbar.Style.HotbarSpacing = v end, 30, 120, 4)
+
+  -- ── Appearance ──────────────────────────────────────────────────────────
+  sect('── Appearance ──')
+
+  -- Helper: build a cycle row over any ordered list
+  local function cycle_row(lbl, list, gf, sf)
+    table.insert(defs, {tp='cycle', label=lbl, list=list,
+                         get=gf, set=sf})
+  end
+
+  cycle_row('Panel BG', PANEL_THEMES,
+    function()
+      local ap = s.ActionPicker
+      return (ap and ap.PanelTheme) or 'dark'
+    end,
+    function(v)
+      if not s.ActionPicker then s.ActionPicker = {} end
+      s.ActionPicker.PanelTheme = v
+      action_picker:apply_panel_theme(v)
+    end)
+
+  cycle_row('Hotbar BG', HOTBAR_THEMES,
+    function()
+      return (s.Hotbar and s.Hotbar.Theme and s.Hotbar.Theme.BarBackground) or 'none'
+    end,
+    function(v)
+      s.Hotbar.Theme.BarBackground = v
+      -- Hotbar backdrop colours take effect on Apply & Reload
+    end)
+
+  cycle_row('Panel Font', PANEL_FONTS,
+    function()
+      local ap = s.ActionPicker
+      return (ap and ap.Font) or 'Calibri'
+    end,
+    function(v)
+      if not s.ActionPicker then s.ActionPicker = {} end
+      s.ActionPicker.Font = v
+      action_picker:apply_font(v)
+    end)
 
   self.st_defs = defs
 end
@@ -966,10 +1121,22 @@ function action_picker:refresh_settings()
     elseif def.tp == 'int' or def.tp == 'flt' then
       local val = def.get()
       la:color(215, 215, 215); la:text(def.label); la:show()
-      ba:pos(R+ST_NUM_A, row_y+3); ba:color(200,200,200); ba:text('[−]'); ba:show()
+      ba:pos(R+ST_NUM_A, row_y+3); ba:color(200,200,200); ba:text('-'); ba:show()
       local vs = def.tp=='flt' and string.format('%.1f', val) or tostring(val)
       bb:pos(R+ST_NUM_B, row_y+3); bb:color(255, 235, 120); bb:text(vs); bb:show()
-      bc:pos(R+ST_NUM_C, row_y+3); bc:color(200,200,200); bc:text('[+]'); bc:show()
+      bc:pos(R+ST_NUM_C, row_y+3); bc:color(200,200,200); bc:text('+'); bc:show()
+
+    elseif def.tp == 'cycle' then
+      -- Find and display the current option's label
+      local cur     = def.get()
+      local cur_lbl = cur
+      for _, item in ipairs(def.list) do
+        if item.key == cur then cur_lbl = item.label; break end
+      end
+      la:color(215, 215, 215); la:text(def.label); la:show()
+      ba:pos(R+ST_CYC_PREV, row_y+3); ba:color(190,190,190); ba:text('<'); ba:show()
+      bb:pos(R+ST_CYC_MID,  row_y+3); bb:color(255, 235, 120); bb:text(cur_lbl); bb:show()
+      bc:pos(R+ST_CYC_NEXT, row_y+3); bc:color(190,190,190); bc:text('>'); bc:show()
     end
   end
 
@@ -1004,6 +1171,10 @@ function action_picker:st_hit(x, y)
   elseif def.tp == 'int' or def.tp == 'flt' then
     if x >= R+ST_NUM_A-2 and x < R+ST_NUM_B-2 then return def, 'a'
     elseif x >= R+ST_NUM_C-2 then return def, 'c' end
+  elseif def.tp == 'cycle' then
+    -- [<] region extends a bit left; [>] occupies the right edge
+    if x >= R+ST_CYC_PREV-2 and x < R+ST_CYC_MID-2 then return def, 'a'
+    elseif x >= R+ST_CYC_NEXT-2 then return def, 'c' end
   end
   return nil
 end
@@ -1074,6 +1245,14 @@ function action_picker:open(anchor_x, anchor_y, settings_ref)
 
   self:build_actions()
   self:build_strips_for_tab()
+
+  -- Apply saved appearance settings before making the panel visible
+  if self.settings_ref then
+    local ap = self.settings_ref.ActionPicker
+    self:apply_panel_theme((ap and ap.PanelTheme) or 'dark')
+    self:apply_font((ap and ap.Font) or 'Calibri')
+  end
+
   self:recalculate_layout()
 
   panel_bg:show(); title_label:show(); hint_label:show()
@@ -1170,6 +1349,15 @@ function action_picker:on_mouse(ev_type, x, y)
           local factor = math.floor(1/def.step + 0.5)
           v = math.floor(v*factor + 0.5)/factor
           def.set(v)
+        elseif def.tp == 'cycle' then
+          local cur = def.get()
+          local ci  = 1
+          for i, item in ipairs(def.list) do
+            if item.key == cur then ci = i; break end
+          end
+          ci = (which == 'a') and ci - 1 or ci + 1
+          if ci < 1 then ci = #def.list elseif ci > #def.list then ci = 1 end
+          def.set(def.list[ci].key)
         end
         self:build_settings_defs(); self:refresh_settings()
         return 'consumed'
@@ -1178,7 +1366,7 @@ function action_picker:on_mouse(ev_type, x, y)
       return nil
     end
 
-    -- Filter strip click (generic - works for any number of strips)
+    -- Filter strip click    -- Filter strip click (generic — works for any number of strips)
     local si, opt_key = self:get_strip_hit(x,y)
     if si then
       self:on_strip_click(si, opt_key); return 'consumed'

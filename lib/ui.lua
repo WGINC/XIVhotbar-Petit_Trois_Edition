@@ -1,5 +1,5 @@
 --[[
-        Copyright © 2020, SirEdeonX, Akirane, Technyze, Dellingr
+        Copyright © 2020, SirEdeonX, Akirane, Technyze
         All rights reserved.
 
         Redistribution and use in source and binary forms, with or without
@@ -17,7 +17,7 @@
         THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
         ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
         WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-        DISCLAIMED. IN NO EVENT SHALL SirEdeonX OR Akirane OR Dellingr BE LIABLE FOR ANY
+        DISCLAIMED. IN NO EVENT SHALL SirEdeonX OR Akirane BE LIABLE FOR ANY
         DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
         (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
         LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
@@ -85,6 +85,7 @@ local current_mp = 0
 local current_pet_mp = 0
 local current_tp = 0
 local bst_charge_time = 30 --default time per bst cmd charge
+local CD_FRAMES       = 32   -- steps in the radial cooldown sweep (frame_01..frame_32)
 
 -- ui metrics
 ui.hotbar_width = 0
@@ -431,11 +432,13 @@ function ui:setup(theme_options)
   self.theme.tp_cost_color_blue = theme_options.font_color_blue_costs_tp
   self:setup_sizing()
   self:setup_environment()
+  -- Bar backdrops must be created before slot content so they render behind icons/frames
+  self:setup_bar_backdrops(theme_options)
   self:setup_disabled_icons()
   self:init_all_hotbars_and_slots()
   -- load feedback icon last so it stays above everything else
   self:setup_feedback()
-  self:setup_edit_button(theme_options)
+  self:setup_lock_panel(theme_options)
   -- Action picker sits above everything, initialised last
   action_picker:init(theme_options, database)
   self.action_picker = action_picker
@@ -610,6 +613,7 @@ function ui:init_hotbar(theme_options, number)
   hotbar.slot_backgrounds  = {}
   hotbar.slot_icons        = {}
   hotbar.slot_recasts      = {}
+  hotbar.slot_cooldown_sweep = {}
   hotbar.slot_frames       = {}
   hotbar.slot_texts        = {}
   hotbar.slot_cost         = {}
@@ -663,6 +667,7 @@ function ui:init_slot(row, column, theme_options)
   self.hotbars[row].slot_icons[column]        = images.new(table.copy(images_setup, true))
   self.hotbars[row].slot_overlay[column]      = images.new(table.copy(overlay_images_setup, true))
   self.hotbars[row].slot_recasts[column]      = images.new(table.copy(images_setup, true))
+  self.hotbars[row].slot_cooldown_sweep[column] = images.new(table.copy(images_setup, true))
   self.hotbars[row].slot_frames[column]       = images.new(table.copy(images_setup, true))
 
   self.hotbars[row].slot_texts[column]        = texts.new(table.copy(text_setup), true)
@@ -703,6 +708,14 @@ function ui:init_slot(row, column, theme_options)
   -- SLOT RECASTS --
   self.hotbars[row].slot_recasts[column]:pos(slot_pos_x, slot_pos_y)
   self.hotbars[row].slot_recasts[column]:alpha(5)
+
+  -- SLOT COOLDOWN SWEEP --
+  self.hotbars[row].slot_cooldown_sweep[column]:path(
+    windower.addon_path .. '/images/cooldown/frame_00.png')
+  self.hotbars[row].slot_cooldown_sweep[column]:fit(false)
+  self.hotbars[row].slot_cooldown_sweep[column]:size(self.image_width, self.image_height)
+  self.hotbars[row].slot_cooldown_sweep[column]:pos(slot_pos_x, slot_pos_y)
+  self.hotbars[row].slot_cooldown_sweep[column]:hide()
 
   -- SLOT FRAMES --
   self.hotbars[row].slot_frames[column]:pos(slot_pos_x, slot_pos_y)
@@ -804,26 +817,106 @@ end
 
 -- Edit button: a small lock/unlock icon to the left of hotbar 1 that toggles layout mode.
 -- Expects two PNGs in images/other/: lock.png (normal) and unlock.png (editing).
-function ui:setup_edit_button(theme_options)
+-- ── Bar backdrop helpers ───────────────────────────────────────────────────
+-- A coloured, semi-transparent rectangle sits behind each hotbar row.
+-- Sized and positioned to tightly wrap the row's slot icons.
+function ui:setup_bar_backdrops(theme_options)
+  self.bar_backdrops = {}
+  local wsq    = windower.addon_path .. '/images/other/white-square.png'
+  local alpha  = theme_options.bar_bg_a or 0
+  local r      = theme_options.bar_bg_r or 0
+  local g      = theme_options.bar_bg_g or 0
+  local b      = theme_options.bar_bg_b or 0
+  local iscale = theme_options.slot_icon_scale or 1
+  local isz    = math.floor(40 * iscale)
+  local sp     = theme_options.slot_spacing or 14
+  local cols   = theme_options.columns or 12
+  local pad    = 4   -- extra pixels of inset on each side
+
+  for row = 1, (theme_options.rows or 0) do
+    local off  = theme_options.offsets[tostring(row)]
+    if not off then break end
+    local vert = off.Vertical
+    local w, h
+    if vert then
+      w = 2 * isz + sp
+      h = math.ceil(cols / 2) * (isz + sp) - sp
+    else
+      w = cols * (isz + sp) - sp
+      h = isz
+    end
+
+    local img = images.new({draggable=false, texture={fit=false}}, true)
+    img:fit(false)
+    img:path(wsq)
+    img:size(w + pad*2, h + pad*2)
+    img:pos(off.OffsetX - pad, off.OffsetY - pad)
+    img:color(r, g, b)
+    img:alpha(alpha)
+    if alpha > 0 then img:show() else img:hide() end
+    self.bar_backdrops[row] = img
+  end
+end
+
+function ui:update_bar_backdrop(row, off_x, off_y)
+  local img = self.bar_backdrops and self.bar_backdrops[row]
+  if img then
+    img:pos(off_x - 4, off_y - 4)
+  end
+  -- Reposition cooldown sweep overlays for every slot in this row
+  if self.hotbars[row] and self.hotbars[row].slot_cooldown_sweep then
+    for s = 1, (self.theme.columns or 12) do
+      local sx, sy = self:get_slot_xy(row, s)
+      if self.hotbars[row].slot_cooldown_sweep[s] then
+        self.hotbars[row].slot_cooldown_sweep[s]:pos(sx, sy)
+      end
+    end
+  end
+end
+
+-- ── Lock button UtilityPanel ─────────────────────────────────────────────────
+-- The lock icon lives inside a UtilityPanel so it can be dragged to any
+-- screen position via the grip handle that appears in edit mode.
+function ui:setup_lock_panel(theme_options)
+  local utility_panel = require('lib/utility_panel')
+
+  -- Default position: left of bar 1 slot 1.  Replaced by saved value if non-zero.
   local bx, by = self:get_slot_xy(1, 1)
-  bx = bx - self.image_width - 22
+  local default_x = bx - self.image_width - 22
+  local default_y = by
+
+  local px = (theme_options.lock_panel_x and theme_options.lock_panel_x ~= 0)
+              and theme_options.lock_panel_x or default_x
+  local py = (theme_options.lock_panel_y and theme_options.lock_panel_y ~= 0)
+              and theme_options.lock_panel_y or default_y
+
+  self.lock_panel = utility_panel:new(px, py, self.image_width, self.image_height)
+
+  -- Create the lock icon image as the panel content
   self.edit_button = images.new(table.copy(images_setup, true))
   self.edit_button:path(windower.addon_path .. '/images/other/lock.png')
   self.edit_button:size(self.image_width, self.image_height)
-  self.edit_button:pos(bx, by)
+  self.edit_button:pos(px, py)
   self.edit_button:alpha(180)
   self.edit_button:show()
+
+  -- Wire position changes into the lock icon
+  local eb = self.edit_button
+  self.lock_panel.on_position_changed = function(p, x, y)
+    eb:pos(x, y)
+  end
+  self.lock_panel.on_show = function(p)
+    eb:show()
+  end
+  self.lock_panel.on_hide = function(p)
+    eb:hide()
+  end
+  self.lock_panel.on_destroy = function(p)
+    eb:hide()
+  end
 end
 
--- Reposition the lock/unlock button to stay anchored left of bar 1 slot 1.
--- Called every prerender frame while in edit mode so it tracks bar 1 as it drags.
-function ui:reposition_edit_button()
-  if self.edit_button == nil then return end
-  local bx, by = self:get_slot_xy(1, 1)
-  bx = bx - self.image_width - 22
-  self.edit_button:pos(bx, by)
-end
-
+-- Switch the lock icon between locked / unlocked state.
 function ui:update_edit_button(is_editing)
   if self.edit_button == nil then return end
   if is_editing then
@@ -833,13 +926,6 @@ function ui:update_edit_button(is_editing)
     self.edit_button:path(windower.addon_path .. '/images/other/lock.png')
     self.edit_button:alpha(180)
   end
-end
-
-function ui:check_edit_button(x, y)
-  if self.edit_button == nil then return false end
-  local bx, by = self.edit_button:pos()
-  local bw, bh = self.edit_button:size()
-  return x >= bx and x <= bx + bw and y >= by and y <= by + bh
 end
 
 function ui:setup_names_text(text, theme_options, pos_x, pos_y)
@@ -916,6 +1002,17 @@ end
 function ui:destroy()
   database:destroy()
 
+  -- Reset cooldown sweep state
+  self.cooldown_initials = {}
+
+  -- Destroy bar backdrop images
+  if self.bar_backdrops then
+    for _, img in ipairs(self.bar_backdrops) do
+      if img then img:hide() end
+    end
+    self.bar_backdrops = {}
+  end
+
   self.hotbar = {
     initialized = false,
     ready = false,
@@ -942,6 +1039,7 @@ function ui:destroy()
   self.feedback.speed = 0
   self.disabled_slots = {}
   self.disabled_slots.actions = {}
+  self.cooldown_initials = {}  -- [row][slot] = max recast seen, for fraction calc
   self.disabled_slots.no_vitals = {}
   self.disabled_slots.on_cooldown = {}
   self.outlined_slots = {}
@@ -982,6 +1080,8 @@ function ui:move_icons(moved_row_info, theme_options)
   local r = moved_row_info.box_index
   self.theme.offsets[tostring(r)].OffsetX = off_x
   self.theme.offsets[tostring(r)].OffsetY = off_y
+  -- Keep the backdrop aligned with the row
+  self:update_bar_backdrop(r, off_x, off_y)
   for i = 1, self.theme.columns, 1 do
     local x, y = self:get_slot_xy(r, i)
     self.hotbars[r].slot_icons[i]:pos(x, y)
@@ -1034,12 +1134,19 @@ function ui:hide()
   self.feedback_icon:hide()
   self.inventory_count:hide()
   if self.edit_button ~= nil then self.edit_button:hide() end
+  if self.lock_panel   ~= nil then self.lock_panel:hide() end
   if self.action_picker and self.action_picker.visible then
     self.action_picker:close()
   end
   if (self.active_environment ~= nil) then
     self.active_environment['battle']:hide()
     self.active_environment['field']:hide()
+  end
+  -- Hide bar backdrop images
+  if self.bar_backdrops then
+    for _, img in ipairs(self.bar_backdrops) do
+      if img then img:hide() end
+    end
   end
   for h = 1, self.theme.hotbar_number, 1 do
     self.hotbars[h].number:hide()
@@ -1050,6 +1157,7 @@ function ui:hide()
       self.hotbars[h].slot_outline[i]:hide()
       self.hotbars[h].slot_frames[i]:hide()
       self.hotbars[h].slot_recasts[i]:hide()
+      self.hotbars[h].slot_cooldown_sweep[i]:hide()
       self.hotbars[h].slot_texts[i]:hide()
       self.hotbars[h].slot_cost[i]:hide()
       self.hotbars[h].slot_recast_texts[i]:hide()
@@ -1072,6 +1180,14 @@ function ui:show(player_hotbar, environment)
 
   self.inventory_count:show()
   if self.edit_button ~= nil then self.edit_button:show() end
+  if self.lock_panel   ~= nil then self.lock_panel:show() end
+
+  -- Restore bar backdrop images (only those with a non-zero alpha)
+  if self.bar_backdrops then
+    for _, img in ipairs(self.bar_backdrops) do
+      if img and self.theme.bar_bg_a and self.theme.bar_bg_a > 0 then img:show() end
+    end
+  end
 
   for h = 1, self.theme.rows, 1 do
     for i = 1, self.theme.columns, 1 do
@@ -1193,8 +1309,12 @@ function ui:load_action(row, slot, environment, action, player_vitals)
       self.hotbars[row].slot_icons[slot]:show()
       self.hotbars[row].slot_overlay[slot]:show()
     elseif action.type == 'ws' then
-      local ws = database[action.type][(action.action):lower()]
-      self:setup_slot_icons('/images/icons/weapons/' .. string.format("%02d", ws.icon) .. '.png', row, slot)
+      local ws = database[action.type] and database[action.type][(action.action):lower()]
+      if ws then
+        self:setup_slot_icons('/images/icons/weapons/' .. string.format("%02d", ws.icon) .. '.png', row, slot)
+      else
+        self:setup_default_slot_icons('default', row, slot)
+      end
 
       -- show cost of WS
       self.hotbars[row].slot_cost[slot]:color(self.theme.tp_cost_color_red, self.theme.tp_cost_color_green,
@@ -1258,6 +1378,7 @@ function ui:clear_slot(hotbar, slot)
   self.hotbars[hotbar].slot_texts[slot]:text('')
   self.hotbars[hotbar].slot_cost[slot]:alpha(255)
   self.hotbars[hotbar].slot_cost[slot]:text('')
+  self:clear_cooldown_sweep(hotbar, slot)
 end
 
 function ui:setup_slot_icons(img_path, row, slot)
@@ -1542,11 +1663,12 @@ function ui:check_if_burstable(action)
       end
     end
   elseif action.type == 'ja' then
-    local skill = database[action.type][(action.action):lower()]
+    local skill = database[action.type] and database[action.type][(action.action):lower()]
     local mb_elements = nil
 
     -- if its a avatar skill, need to use data from other table
-    if skill.prefix == '/pet' and skill.type == 'BloodPactRage' then
+    -- skill can be nil for abilities not in the ja table (e.g. COR Quick Draw)
+    if skill and skill.prefix == '/pet' and skill.type == 'BloodPactRage' then
       local bloodpact = htb_bloodpacts[tonumber(skill.oid)]
       if bloodpact and bloodpact.damage == 'magic' then
         if self.current_target then
@@ -1570,7 +1692,9 @@ function ui:check_if_chainable(action)
 
   -- NOT SUPPORTED YET: sch immanence
   if action.type == 'ja' or action.type == 'ws' then
-    local skill = database[action.type][(action.action):lower()]
+    local skill = database[action.type] and database[action.type][(action.action):lower()]
+
+    if not skill then return false end
 
     -- if its a bstpet skill, need to transform to our other table
     if skill.prefix == '/pet' and skill.type == 'Monster' then
@@ -1744,10 +1868,15 @@ function ui:inner_check_recasts(player_hotbar, environment, player_vitals, row, 
     end
 
     if in_cooldown == true then
+      local raw_recast  = recast_time   -- raw units, needed for sweep fraction
       local recast_time = self:calc_recast_time(recast_time, action.type)
       self:show_recast(row, slot, recast_time)
       self:disable_slot(row, slot, action)
       self:disable_outline(row, slot, action)
+      -- Update or advance the radial sweep overlay
+      if self.theme.show_cooldown_sweep then
+        self:update_cooldown_sweep(row, slot, raw_recast)
+      end
     elseif is_disabled == true then
       self:clear_recast(row, slot)
       self:disable_slot(row, slot, action)
@@ -1825,6 +1954,8 @@ function ui:clear_recast(r, s)
   self.hotbars[r].slot_recasts[s]:hide()
   self.hotbars[r].slot_keys[s]:show()
   self.hotbars[r].slot_recast_texts[s]:text('')
+  -- always clear the sweep regardless of setting (handles setting toggle mid-session)
+  self:clear_cooldown_sweep(r, s)
 end
 
 -- clear recast from a slot
@@ -1835,7 +1966,12 @@ function ui:hide_recast(r, s)
 end
 
 function ui:show_recast(r, s, recast_time)
-  self.hotbars[r].slot_recasts[s]:show()
+  -- When the radial sweep is active it replaces the solid grey overlay.
+  if self.theme.show_cooldown_sweep then
+    self.hotbars[r].slot_recasts[s]:hide()
+  else
+    self.hotbars[r].slot_recasts[s]:show()
+  end
   self.hotbars[r].slot_recast_texts[s]:text(recast_time)
   self.hotbars[r].slot_recast_texts[s]:show()
   self.hotbars[r].slot_keys[s]:hide()
@@ -1873,6 +2009,48 @@ function ui:calc_recast_time(time, type)
   end
 
   return recast
+end
+
+-- ── Cooldown sweep helpers ───────────────────────────────────────────────────
+-- Update the radial arc overlay for a slot that is currently on cooldown.
+-- recast_remaining is the raw Windower recast value (1/60th-second units for ja,
+-- 1/4-second-ish units for ma — same units used by show_recast).
+function ui:update_cooldown_sweep(row, slot, recast_remaining)
+  if not self.hotbars[row] or not self.hotbars[row].slot_cooldown_sweep[slot] then
+    return
+  end
+  -- Guard against first-call before setup() sets the table
+  if not self.cooldown_initials then self.cooldown_initials = {} end
+  -- Track the maximum (initial) recast seen for this slot so we can
+  -- calculate the remaining fraction even if the addon loaded mid-cooldown.
+  if not self.cooldown_initials[row] then
+    self.cooldown_initials[row] = {}
+  end
+  local init = self.cooldown_initials[row][slot]
+  if not init or recast_remaining > init then
+    init = recast_remaining
+    self.cooldown_initials[row][slot] = init
+  end
+
+  -- Map remaining → frame index 1..CD_FRAMES (0 hides the overlay)
+  local fraction = (init > 0) and math.max(0, math.min(1, recast_remaining / init)) or 0
+  local frame    = math.max(1, math.floor(fraction * CD_FRAMES + 0.5))
+
+  local img  = self.hotbars[row].slot_cooldown_sweep[slot]
+  local path = windower.addon_path
+             .. '/images/cooldown/frame_'
+             .. string.format('%02d', frame) .. '.png'
+  img:path(path)
+  img:show()
+end
+
+function ui:clear_cooldown_sweep(row, slot)
+  if self.cooldown_initials and self.cooldown_initials[row] then
+    self.cooldown_initials[row][slot] = nil
+  end
+  if self.hotbars[row] and self.hotbars[row].slot_cooldown_sweep[slot] then
+    self.hotbars[row].slot_cooldown_sweep[slot]:hide()
+  end
 end
 
 -- check action recasts

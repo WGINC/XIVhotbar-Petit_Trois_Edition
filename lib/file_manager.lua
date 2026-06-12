@@ -1,5 +1,5 @@
 --[[
-        Copyright © 2020, Akirane, Technyze, Dellingr
+        Copyright © 2020, Akirane, Technyze
         All rights reserved.
 
         Redistribution and use in source and binary forms, with or without
@@ -17,7 +17,7 @@
         THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
         ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
         WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-        DISCLAIMED. IN NO EVENT SHALL SirEdeonX OR Akirane OR Dellingr BE LIABLE FOR ANY
+        DISCLAIMED. IN NO EVENT SHALL SirEdeonX OR Akirane BE LIABLE FOR ANY
         DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
         (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
         LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
@@ -151,7 +151,7 @@ local function write_swap(file_location, action, d_row, d_slot, s_row, s_slot, e
         end
         if (val:lower():contains(testAc)) then
           found_row = true
-          -- Replace the exact matched token (avoids the old regex corrupting 'battle' -> 'battlX Y Z')
+          -- Replace the exact matched token (avoids the old regex corrupting 'battle' → 'battlX Y Z')
           fileContent[key] = val:gsub(row_to_find, new_row, 1)
           if (debug == true) then
             print("val:lower():contains(testAc) succeeded")
@@ -232,7 +232,7 @@ local function find_in_file(file_content, action, environment, pattern)
       if (found_in_section == false) then
         new_row = "\t{'" ..
         environment ..
-        "', '" .. action.type .. "', '" .. action.action .. "', '" .. action.target .. "', '" .. action.alias .. "'},"
+        "', '" .. action.type .. "', \"" .. action.action .. "\", '" .. action.target .. "', \"" .. action.alias .. "\"},"
         table.insert(file_content, pattern_end + 1, new_row)
       end
     end

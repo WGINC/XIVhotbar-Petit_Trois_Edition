@@ -209,6 +209,24 @@ function player:reset_finishing_moves()
   self.finishing_moves = 0
 end
 
+-- Derive the current finishing-move count directly from the live buff list.
+-- Used on both gain and lose buff events so upgrades (FM2->FM3) and
+-- decrements (Waltz, Samba, Step usage) both land on the correct value.
+function player:sync_finishing_moves()
+  local buffs = windower.ffxi.get_player().buffs
+  local fm = 0
+  for _, b in ipairs(buffs) do
+    if     b == 381 then fm = math.max(fm, 1)
+    elseif b == 382 then fm = math.max(fm, 2)
+    elseif b == 383 then fm = math.max(fm, 3)
+    elseif b == 384 then fm = math.max(fm, 4)
+    elseif b == 385 then fm = math.max(fm, 5)
+    elseif b == 588 then fm = math.max(fm, 6)
+    end
+  end
+  self.finishing_moves = fm
+end
+
 -- update player level
 function player:update_level(main_level, sub_level)
   self.main_job_level = main_level
